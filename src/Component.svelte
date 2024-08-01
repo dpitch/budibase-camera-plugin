@@ -1,5 +1,5 @@
 <script>
-  import { getContext, onDestroy } from "svelte";
+  import { getContext, onDestroy, onMount } from "svelte";
   import Captures from "./Captures.svelte";
   import Loading from "./Loading.svelte";
 
@@ -14,8 +14,6 @@
 
   let loading = false;
   let cameraActive = false;
-
-  let mirrored = false;
   let imageCaptured = false;
 
   let fieldApi;
@@ -24,6 +22,8 @@
   let blob;
   let imageUrl;
   let cameraStream;
+  let videoElement;
+  let canvasElement;
 
   const formApi = formContext?.formApi;
   const labelPos = fieldGroupContext?.labelPosition || "above";
@@ -45,6 +45,11 @@
   $: labelClass =
     labelPos === "above" ? "" : `spectrum-FieldLabel--${labelPos}`;
 
+  onMount(() => {
+    videoElement = document.getElementById('camera-preview');
+    canvasElement = document.getElementById('capture-canvas');
+  });
+
   onDestroy(() => {
     fieldApi?.deregister();
     unsubscribe?.();
@@ -56,12 +61,13 @@
     try {
       cameraStream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: "environment" }
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
         },
       });
-      const videoElement = document.getElementById('camera-preview');
       videoElement.srcObject = cameraStream;
-      videoElement.play();
+      await videoElement.play();
       cameraActive = true;
     } catch (error) {
       console.log(error);
@@ -70,19 +76,17 @@
     loading = false;
   };
 
-  const capture = async () => {
-    const videoElement = document.getElementById('camera-preview');
-    const canvas = document.createElement('canvas');
-    canvas.width = videoElement.videoWidth;
-    canvas.height = videoElement.videoHeight;
-    canvas.getContext('2d').drawImage(videoElement, 0, 0);
-    canvas.toBlob((b) => {
+  const capture = () => {
+    canvasElement.width = videoElement.videoWidth;
+    canvasElement.height = videoElement.videoHeight;
+    canvasElement.getContext('2d').drawImage(videoElement, 0, 0);
+    canvasElement.toBlob((b) => {
       blob = b;
       blob.name = "capture.jpg";
       blob.extension = "jpeg";
       imageUrl = URL.createObjectURL(blob);
       imageCaptured = true;
-    }, 'image/jpeg');
+    }, 'image/jpeg', 0.95);
   };
 
   const upload = async () => {
@@ -99,7 +103,6 @@
   const uploadImage = async (image) => {
     let data = new FormData();
     data.append("file", image, "capture.jpg");
-    imageCaptured = false;
     try {
       const res = await API.uploadAttachment({
         data,
@@ -111,11 +114,10 @@
     }
   };
 
-  const remove = () => {
+  const retake = () => {
     blob = null;
     imageCaptured = false;
     imageUrl = null;
-    openCamera();
   };
 
   const stopCamera = () => {
@@ -147,62 +149,30 @@
         <div class="container">
           <Loading {loading} />
 
-          {#if cameraActive || loading}
-            {#if imageCaptured}
-              <img alt="preview" src={imageUrl} />
-              <div class="actions">
-                <button
-                  on:click={remove}
-                  class="spectrum-Button spectrum-Button--fill spectrum-Button--sizeM spectrum-Button--primary"
-                  >Remove</button
-                >
-                <button
-                  on:click={upload}
-                  class="spectrum-Button spectrum-Button--fill spectrum-Button--sizeM spectrum-Button--primary"
-                  >Use photo</button
-                >
-              </div>
-            {:else}
-              <div>
-                <video id="camera-preview" class:mirrored autoplay playsinline />
-              </div>
-              <div class="actions">
-                <button
-                  on:click={stopCamera}
-                  class="spectrum-ActionButton spectrum-ActionButton--sizeL"
-                >
-                  <svg
-                    class="spectrum-Icon spectrum-Icon--sizeL spectrum-ActionButton-icon"
-                    focusable="false"
+          {#if cameraActive}
+            <div class="camera-container">
+              {#if imageCaptured}
+                <img alt="preview" src={imageUrl} />
+                <div class="actions">
+                  <button
+                    on:click={retake}
+                    class="spectrum-Button spectrum-Button--fill spectrum-Button--sizeM spectrum-Button--primary"
+                    >Retake</button
                   >
-                    <use xlink:href="#spectrum-icon-18-Close" />
-                  </svg>
-                </button>
-
-                <button
-                  on:click={capture}
-                  class="spectrum-ActionButton spectrum-ActionButton--sizeL"
-                >
-                  <svg
-                    class="spectrum-Icon spectrum-Icon--sizeL spectrum-ActionButton-icon"
-                    focusable="false"
+                  <button
+                    on:click={upload}
+                    class="spectrum-Button spectrum-Button--fill spectrum-Button--sizeM spectrum-Button--primary"
+                    >Use photo</button
                   >
-                    <use xlink:href="#spectrum-icon-18-Camera" />
-                  </svg>
-                </button>
-                <button
-                  on:click={() => (mirrored = !mirrored)}
-                  class="spectrum-ActionButton spectrum-ActionButton--sizeL"
-                >
-                  <svg
-                    class="spectrum-Icon spectrum-Icon--sizeL spectrum-ActionButton-icon"
-                    focusable="false"
-                  >
-                    <use xlink:href="#spectrum-icon-18-FlipHorizontal" />
-                  </svg>
-                </button>
-              </div>
-            {/if}
+                </div>
+              {:else}
+                <video id="camera-preview" autoplay playsinline />
+                <canvas id="capture-canvas" style="display: none;"></canvas>
+                <div class="capture-button" on:click={capture}>
+                  <div class="capture-button-inner"></div>
+                </div>
+              {/if}
+            </div>
           {:else}
             <div class="actions">
               <button
@@ -225,26 +195,49 @@
 </div>
 
 <style>
-  img {
+  .camera-container {
+    position: relative;
     width: 100%;
+    padding-top: 56.25%; /* 16:9 Aspect Ratio */
+    overflow: hidden;
   }
-  video {
+
+  .camera-container video,
+  .camera-container img {
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
-  canvas {
-    width: 100%;
-    display: none;
+
+  .capture-button {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.3);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .capture-button-inner {
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background-color: white;
   }
 
   .actions {
     display: flex;
     justify-content: space-between;
-  }
-
-  .mirrored {
-    transform: rotateY(180deg);
-    -webkit-transform: rotateY(180deg);
-    -moz-transform: rotateY(180deg);
+    margin-top: 10px;
   }
 
   .spectrum-ActionButton .spectrum-Icon {
