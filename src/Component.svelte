@@ -2,7 +2,6 @@
   import { getContext, onDestroy } from "svelte";
   import Captures from "./Captures.svelte";
   import Loading from "./Loading.svelte";
-  import { ImageCapture } from "image-capture";
 
   export let field;
   export let label;
@@ -14,18 +13,17 @@
   const fieldGroupContext = getContext("field-group");
 
   let loading = false;
-  let previewEnabled = false;
+  let cameraActive = false;
 
-  let mirrored = false; // Changed to false as we're defaulting to rear camera
+  let mirrored = false;
   let imageCaptured = false;
-  let videoSource = {};
 
   let fieldApi;
   let fieldState;
 
   let blob;
-  let imageCapture;
   let imageUrl;
+  let cameraStream;
 
   const formApi = formContext?.formApi;
   const labelPos = fieldGroupContext?.labelPosition || "above";
@@ -50,38 +48,41 @@
   onDestroy(() => {
     fieldApi?.deregister();
     unsubscribe?.();
+    stopCamera();
   });
 
-  const openPreview = async () => {
+  const openCamera = async () => {
     loading = true;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      cameraStream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" }
         },
       });
-      const track = stream.getVideoTracks()[0];
-      imageCapture = new ImageCapture(track);
-
-      videoSource.srcObject = stream;
-      videoSource.play();
-      videoSource = videoSource;
-
-      imageCapture.takePhoto();
-      previewEnabled = true;
+      const videoElement = document.getElementById('camera-preview');
+      videoElement.srcObject = cameraStream;
+      videoElement.play();
+      cameraActive = true;
     } catch (error) {
       console.log(error);
-      previewEnabled = false;
+      cameraActive = false;
     }
     loading = false;
   };
 
   const capture = async () => {
-    blob = await imageCapture.takePhoto();
-    imageCaptured = true;
-    blob.name = "capture.jpg";
-    blob.extension = "jpeg";
-    imageUrl = URL.createObjectURL(blob);
+    const videoElement = document.getElementById('camera-preview');
+    const canvas = document.createElement('canvas');
+    canvas.width = videoElement.videoWidth;
+    canvas.height = videoElement.videoHeight;
+    canvas.getContext('2d').drawImage(videoElement, 0, 0);
+    canvas.toBlob((b) => {
+      blob = b;
+      blob.name = "capture.jpg";
+      blob.extension = "jpeg";
+      imageUrl = URL.createObjectURL(blob);
+      imageCaptured = true;
+    }, 'image/jpeg');
   };
 
   const upload = async () => {
@@ -92,7 +93,7 @@
     files.push(res[0]);
     fieldApi?.setValue(files);
     imageCaptured = false;
-    openPreview();
+    stopCamera();
   };
 
   const uploadImage = async (image) => {
@@ -114,21 +115,17 @@
     blob = null;
     imageCaptured = false;
     imageUrl = null;
-    openPreview();
+    openCamera();
   };
 
-  const stop = () => {
-    var stream = videoSource.srcObject;
-    var tracks = stream.getTracks();
-
-    for (var i = 0; i < tracks.length; i++) {
-      var track = tracks[i];
-      track.stop();
+  const stopCamera = () => {
+    if (cameraStream) {
+      const tracks = cameraStream.getTracks();
+      tracks.forEach(track => track.stop());
     }
-
-    videoSource = {};
+    cameraStream = null;
+    cameraActive = false;
     imageCaptured = false;
-    previewEnabled = false;
   };
 </script>
 
@@ -150,9 +147,8 @@
         <div class="container">
           <Loading {loading} />
 
-          {#if previewEnabled || loading}
+          {#if cameraActive || loading}
             {#if imageCaptured}
-              <canvas id="takePhotoCanvas" />
               <img alt="preview" src={imageUrl} />
               <div class="actions">
                 <button
@@ -168,17 +164,11 @@
               </div>
             {:else}
               <div>
-                <!-- svelte-ignore a11y-media-has-caption -->
-                <video class:mirrored bind:this={videoSource} />
+                <video id="camera-preview" class:mirrored autoplay playsinline />
               </div>
-            {/if}
-          {/if}
-
-          {#if !imageCaptured}
-            <div class="actions">
-              {#if previewEnabled}
+              <div class="actions">
                 <button
-                  on:click={stop}
+                  on:click={stopCamera}
                   class="spectrum-ActionButton spectrum-ActionButton--sizeL"
                 >
                   <svg
@@ -211,13 +201,15 @@
                     <use xlink:href="#spectrum-icon-18-FlipHorizontal" />
                   </svg>
                 </button>
-              {:else}
-                <button
-                  on:click={openPreview}
-                  class="spectrum-Button spectrum-Button--fill spectrum-Button--sizeM spectrum-Button--primary"
-                  >Open camera</button
-                >
-              {/if}
+              </div>
+            {/if}
+          {:else}
+            <div class="actions">
+              <button
+                on:click={openCamera}
+                class="spectrum-Button spectrum-Button--fill spectrum-Button--sizeM spectrum-Button--primary"
+                >Open camera</button
+              >
             </div>
           {/if}
 
